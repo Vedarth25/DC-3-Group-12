@@ -1,0 +1,14 @@
+
+*.weights
+
+
+z_demo_*
+
+__pycache__
+.idea
+.vscode
+
+
+predictions.jpg
+
+data

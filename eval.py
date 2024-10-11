@@ -29,7 +29,7 @@ def detect_fish_in_image(imgfile, m, pre=False):
         print("pre processing not implemented")
         
 
-    boxes = do_detect(m, sized, 0.4, 0.6, use_cuda)
+    boxes = do_detect(m, sized, 0.4, 0.4, use_cuda)
     
     # Assuming that each box is a fish detection
     num_fish_detected = len(boxes[0])  # Each box is a fish detection
@@ -105,7 +105,9 @@ def tp_fp_fn(boxes, mask):
 
     height, width = mask.shape[:2]
     #check for true positives and false positives
-    print(boxes)
+    # Sort in order by x
+    boxes.sort(key=lambda box: box[0])
+    points = sorted(points, key=lambda point: cv2.minEnclosingCircle(point)[0][0])
     for i in range(len(boxes)):
         box = boxes[i]
         x1 = int(box[0] * width)
@@ -118,7 +120,7 @@ def tp_fp_fn(boxes, mask):
         for point in points:
             (x, y), _ = cv2.minEnclosingCircle(point)
             center = (int(x), int(y))
-            if x1 <= x <= x2 and y1 <= y <= y2:
+            if x1 <= x <= x2 and y1 <= y <= y2 and center not in covered_points:
                 tp += 1
                 box_found = True
                 covered_points.add(center)
@@ -152,6 +154,8 @@ def evaluate_from_test_folder(test_folder, m, pre=False):
 
     for img_file in tqdm(image_files, total=total_images, desc="Evaluating images from test folder", unit="img"):
         img_id = os.path.splitext(img_file)[0]
+        if img_id != "A000049_L-avi-16367":
+            continue
         img_path = os.path.join(test_folder, img_file)
         txt_path = os.path.join(test_folder, img_id + '.txt')
 
@@ -166,25 +170,34 @@ def evaluate_from_test_folder(test_folder, m, pre=False):
         ground_truth_boxes = []
         for line in lines:
             class_id, center_x, center_y, width, height = map(float, line.split())
-            x1 = int((center_x - width / 2) * m.width)
-            y1 = int((center_y - height / 2) * m.height)
-            x2 = int((center_x + width / 2) * m.width)
-            y2 = int((center_y + height / 2) * m.height)
+            x1 = (center_x - width / 2)
+            y1 = (center_y - height / 2)
+            x2 = (center_x + width / 2)
+            y2 = (center_y + height / 2)
             ground_truth_boxes.append([x1, y1, x2, y2])
 
         detected_count, boxes = detect_fish_in_image(img_path, m, pre)
 
+
+        # #temporal debugging
+        print(ground_truth_boxes)
+        img = cv2.imread(img_path)
+        test = boxes[0] + ground_truth_boxes
+        plot_boxes_cv2(img, test, savename='all.jpg', class_names=['fish'])
+        plot_boxes_cv2(img, ground_truth_boxes, savename='test_truth.jpg', class_names=['fish'])
+        input("Press Enter to continue...")
+
         tp, fp, fn = match_bboxes(ground_truth_boxes, boxes[0], iou_threshold=0.5)
 
-        if tp + len(fn) != ground_truth_count or tp + len(fp) != detected_count:
+        if tp + fn != ground_truth_count or tp + fp != detected_count:
             raise Exception(f"Ground truth count mismatch for image {img_id}. Your box matching is shit")
         
-        if len(fp) > 0 or len(fn) > 0:
-            mismatch_ids.append(img_id +  " FP:" + str(len(fp)) + " FN" + str(len(fn)))
+        if fp > 0 or fn > 0:
+            mismatch_ids.append(img_id +  " FP:" + str(fp) + " FN" + str(fn))
 
         final_tp += tp
-        final_fp += len(fp)
-        final_fn += len(fn)
+        final_fp += fp
+        final_fn += fn
 
     # Save mismatches to a txt file
     with open("missmatched_IDs_test", 'w') as f:
@@ -205,19 +218,29 @@ def match_bboxes(true_bboxes, pred_bboxes, iou_threshold=0.5):
     # Create an array to keep track of matched true bboxes
     matched_true_boxes = [False] * len(true_bboxes)
     
+    #sort boxes by x values
+    true_bboxes.sort(key=lambda box: box[0])
+    pred_bboxes.sort(key=lambda box: box[0])
+    boxes = true_bboxes + pred_bboxes
+    print("amount of predicted boxes", len(pred_bboxes))
     for pred_box in pred_bboxes:
         matched = False
+        max = 0
+        print("predicted box",pred_box)
         
         for i, true_box in enumerate(true_bboxes):
             iou = bbox_iou(true_box, pred_box)
-            if iou >= iou_threshold and not matched_true_boxes[i]:
-                # It's a match!
-                TP += 1
-                matched_true_boxes[i] = True
-                matched = True
-                break
-        
-        if not matched:
+            print(iou, true_box)
+            if iou >= iou_threshold and not matched_true_boxes[i] and iou > max:
+                max = iou
+                max_index = i
+        # It's a match!
+        if max > 0:
+            print(max)
+            TP += 1
+            matched_true_boxes[max_index] = True
+            matched = True
+        else:
             # If no true box was matched, it's a false positive
             FP += 1
     
@@ -279,7 +302,6 @@ def get_args():
                         help='enable pre-processing')
     parser.add_argument('-t', '--test', action='store_true',
                         help='make it test agains test folder')
-    parser.add_argument('-p')
     args = parser.parse_args()
     return args
 
@@ -313,7 +335,7 @@ if __name__ == '__main__':
     csv_file = 'data/Localization.csv'
     image_folder = 'data/images'
     output_txt = 'mismatch_ids.txt'
-    args = get_args()
+    #args = get_args()
 
 
 
@@ -323,8 +345,9 @@ if __name__ == '__main__':
     if use_cuda:
         m.cuda()
 
-    if args.test:
-        TP, FP, FN = evaluate_from_test_folder('test', m, args.preprocess)
+    # artgs.test does not work
+    if True:
+        TP, FP, FN = evaluate_from_test_folder('data/test', m, False)
     else:
         TP, FP, FN = evaluate_model(csv_file, image_folder, output_txt, m, args.preprocess)
     

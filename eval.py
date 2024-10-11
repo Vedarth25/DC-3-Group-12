@@ -34,7 +34,7 @@ def detect_fish_in_image(imgfile, m, pre=False):
     # Assuming that each box is a fish detection
     num_fish_detected = len(boxes[0])  # Each box is a fish detection
 
-    return num_fish_detected
+    return num_fish_detected, boxes
 
 def evaluate_model(csv_file, image_folder, output_txt, m, pre=False):
     """
@@ -44,16 +44,12 @@ def evaluate_model(csv_file, image_folder, output_txt, m, pre=False):
     """
     # Read the CSV file
     data = pd.read_csv(csv_file)
-    
     total_images = len(data)
-    correct_detections = 0
-    under_detections = 0
-    over_detections = 0
 
     mismatch_ids = []
-
-    ground_truth_list = []
-    predicted_list = []
+    final_tp = 0
+    final_fn = 0
+    final_fp = 0
 
     # Loop over each row in the CSV
     for index, row in tqdm(data.iterrows(), total=total_images, desc="Evaluating images", unit="img"):
@@ -69,28 +65,75 @@ def evaluate_model(csv_file, image_folder, output_txt, m, pre=False):
             continue
 
         # Detect fish in the image
-        detected_count = detect_fish_in_image(img_path, m, pre)
+        detected_count, boxes = detect_fish_in_image(img_path, m, pre)
 
-        ground_truth_list.append(ground_truth_count)
-        predicted_list.append(detected_count)
+        # Load the mask to compare with the detected boxes
+        mask_path = os.path.join('data/masks', img_id + '.png')
+        mask = cv2.imread(mask_path)
+        tp, fp, fn = tp_fp_fn(boxes[0], mask)
+        #check for correctness
+        if tp + len(fn) != ground_truth_count or tp + len(fp) != detected_count:
+            print(tp, len(fn), ground_truth_count, detected_count, tp, len(fp))
+            raise Exception(f"Ground truth count mismatch for image {img_id}. Your point matcher is shit")
 
-        # Compare with ground truth
-        if detected_count == ground_truth_count:
-            correct_detections += 1
-        elif detected_count < ground_truth_count:
-            under_detections += 1
-            mismatch_ids.append(img_id)
-        else:
-            over_detections += 1
-            mismatch_ids.append(img_id)
+        if len(fp) > 0 or len(fn) > 0:
+            mismatch_ids.append(img_id +  " FP:" + str(len(fp)) + " FN" + str(len(fn)))
+        
+        final_tp += tp
+        final_fp += len(fp)
+        final_fn += len(fn)
 
     # Save mismatches to a txt file
     with open(output_txt, 'w') as f:
         for img_id in mismatch_ids:
             f.write(f"{img_id}\n")
 
-    # Return statistics
-    return total_images, correct_detections, under_detections, over_detections, ground_truth_list, predicted_list
+    return final_tp, final_fp, final_fn
+
+def tp_fp_fn(boxes, mask):
+    """
+    Function to calculate true positives, false positives, and false negatives from boxes and points
+    """
+    # Convert mask to grayscale
+    gray_mask = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
+    points, _ = cv2.findContours(gray_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    tp = 0
+    fp = []
+    fn = []
+    covered_points = set()
+
+    height, width = mask.shape[:2]
+    #check for true positives and false positives
+    print(boxes)
+    for i in range(len(boxes)):
+        box = boxes[i]
+        x1 = int(box[0] * width)
+        y1 = int(box[1] * height)
+        x2 = int(box[2] * width)
+        y2 = int(box[3] * height)
+        box_found = False
+
+
+        for point in points:
+            (x, y), _ = cv2.minEnclosingCircle(point)
+            center = (int(x), int(y))
+            if x1 <= x <= x2 and y1 <= y <= y2:
+                tp += 1
+                box_found = True
+                covered_points.add(center)
+                break
+        if not box_found:
+            fp.append(box)
+
+    #check for false negatives
+    for point in points:
+        (x, y), _ = cv2.minEnclosingCircle(point)
+        center = (int(x), int(y))
+        if tuple(center) not in covered_points:
+            fn.append(center)
+    
+    return tp, fp, fn
 
 def evaluate_from_test_folder(test_folder, m, pre=False):
     """
@@ -99,6 +142,11 @@ def evaluate_from_test_folder(test_folder, m, pre=False):
     image_files = [f for f in os.listdir(test_folder) if f.endswith('.jpg')]
     total_images = len(image_files)
 
+    final_tp = 0
+    final_fp = 0
+    final_fn = 0
+
+    mismatch_ids = []
     all_ground_truths = []
     all_predictions = []
 
@@ -113,13 +161,70 @@ def evaluate_from_test_folder(test_folder, m, pre=False):
 
         # Load ground truth from txt file (format: class_id, center_x, center_y, width, height)
         with open(txt_path, 'r') as f:
-            ground_truth_count = len(f.readlines())  # Each line represents one object
+            lines = f.readlines()
+        ground_truth_count = len(lines)  # Each line represents one object
+        ground_truth_boxes = []
+        for line in lines:
+            class_id, center_x, center_y, width, height = map(float, line.split())
+            x1 = int((center_x - width / 2) * m.width)
+            y1 = int((center_y - height / 2) * m.height)
+            x2 = int((center_x + width / 2) * m.width)
+            y2 = int((center_y + height / 2) * m.height)
+            ground_truth_boxes.append([x1, y1, x2, y2])
 
-        detected_count, _ = detect_fish_in_image(img_path, m, pre)
-        all_ground_truths.append(ground_truth_count)
-        all_predictions.append(detected_count)
+        detected_count, boxes = detect_fish_in_image(img_path, m, pre)
 
-    return all_ground_truths, all_predictions
+        tp, fp, fn = match_bboxes(ground_truth_boxes, boxes[0], iou_threshold=0.5)
+
+        if tp + len(fn) != ground_truth_count or tp + len(fp) != detected_count:
+            raise Exception(f"Ground truth count mismatch for image {img_id}. Your box matching is shit")
+        
+        if len(fp) > 0 or len(fn) > 0:
+            mismatch_ids.append(img_id +  " FP:" + str(len(fp)) + " FN" + str(len(fn)))
+
+        final_tp += tp
+        final_fp += len(fp)
+        final_fn += len(fn)
+
+    # Save mismatches to a txt file
+    with open("missmatched_IDs_test", 'w') as f:
+        for img_id in mismatch_ids:
+            f.write(f"{img_id}\n")
+
+    return final_tp, final_fp, final_fn
+
+def match_bboxes(true_bboxes, pred_bboxes, iou_threshold=0.5):
+    """
+    Matches ground truth boxes with predicted boxes using IoU.
+    Returns TP, FP, FN counts.
+    """
+    TP = 0
+    FP = 0
+    FN = 0
+
+    # Create an array to keep track of matched true bboxes
+    matched_true_boxes = [False] * len(true_bboxes)
+    
+    for pred_box in pred_bboxes:
+        matched = False
+        
+        for i, true_box in enumerate(true_bboxes):
+            iou = bbox_iou(true_box, pred_box)
+            if iou >= iou_threshold and not matched_true_boxes[i]:
+                # It's a match!
+                TP += 1
+                matched_true_boxes[i] = True
+                matched = True
+                break
+        
+        if not matched:
+            # If no true box was matched, it's a false positive
+            FP += 1
+    
+    # Any unmatched true box is a false negative
+    FN = matched_true_boxes.count(False)
+    
+    return TP, FP, FN
 
 def create_infographic(total_images, correct_detections, under_detections, over_detections):
     """
@@ -139,20 +244,34 @@ def create_infographic(total_images, correct_detections, under_detections, over_
     plt.savefig('model_performance_infographic.png')
     plt.show()
 
-def create_confusion_matrix(ground_truth_list, predicted_list):
+def create_confusion_matrix_from_counts(TP, FP, FN):
     """
-    Function to create and display/save a confusion matrix showing actual vs predicted fish counts.
+    Function to create and display/save a confusion matrix based on counts of TP, FP, and FN.
+    Excludes True Negatives (TN) since they are not tracked.
     """
-    plt.figure(figsize=(10, 8))
-    data = {'Ground Truth': ground_truth_list, 'Predicted': predicted_list}
-    df = pd.DataFrame(data, columns=['Ground Truth', 'Predicted'])
+    # Define a confusion matrix with 2 rows (Actual Positive and Negative) and 2 columns (Predicted Positive and Negative)
+    # We assume TN is unknown, so we only show counts for TP, FP, and FN.
+    confusion_matrix = [[TP, FP],   # Row for "Actual Positive"
+                        [FN, 0]]    # Row for "Actual Negative" (TN is unknown, set to 0)
 
-    confusion_matrix = pd.crosstab(df['Ground Truth'], df['Predicted'], rownames=['Actual'], colnames=['Predicted'], dropna=False)
+    # Define labels for the axes
+    labels = ['Predicted Positive', 'Predicted Negative']
+    categories = ['Actual Positive', 'Actual Negative']
+
+    plt.figure(figsize=(8, 6))
     
-    sns.heatmap(confusion_matrix, annot=True, fmt="d", cmap="Blues")
-    plt.title('Confusion Matrix: Actual vs Predicted Fish Counts')
-    plt.savefig('confusion_matrix.png')
+    # Create a heatmap with annotations of the confusion matrix values
+    sns.heatmap(confusion_matrix, annot=True, fmt="d", cmap="Blues", 
+                xticklabels=labels, yticklabels=categories)
+    
+    plt.title('Confusion Matrix (Excludes TN)')
+    plt.xlabel('Predicted Label')
+    plt.ylabel('Actual Label')
+    
+    # Save and display the confusion matrix plot
+    plt.savefig('confusion_matrix_from_counts_without_TN.png')
     plt.show()
+
 
 def get_args():
     parser = argparse.ArgumentParser('Test your image or video by trained model.')
@@ -160,17 +279,32 @@ def get_args():
                         help='enable pre-processing')
     parser.add_argument('-t', '--test', action='store_true',
                         help='make it test agains test folder')
+    parser.add_argument('-p')
     args = parser.parse_args()
     return args
 
-def calculate_metrics(ground_truths, predictions):
+#Does not calculate average precision
+def calculate_metrics(TP, FP, FN):
     """
-    Calculate precision, recall, F1-score, and average precision.
+    Calculate precision, recall, F1-score, and average precision from TP, FP, FN.
+    TP: True Positives
+    FP: False Positives
+    FN: False Negatives
     """
-    precision, recall, f1, _ = precision_recall_fscore_support(ground_truths, predictions, average='weighted', zero_division=0)
-    average_precision = average_precision_score(ground_truths, predictions)
+    # Calculate precision
+    precision = TP / (TP + FP) if (TP + FP) > 0 else 0
+    # Calculate recall
+    recall = TP / (TP + FN) if (TP + FN) > 0 else 0
+    # Calculate F1-score
+    f1_score = (2 * precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+    
+    # Average Precision (AP) is typically calculated over the entire precision-recall curve,
+    # but if you want a simple version, you can approximate it as:
+    #average_precision = precision  # As a simple approximation, you can use precision.
 
-    return precision * 100, recall * 100, f1 * 100, average_precision * 100
+    # Return metrics in percentages
+    return precision * 100, recall * 100, f1_score * 100, #average_precision * 100
+
 
 if __name__ == '__main__':
     # Configuration files
@@ -180,8 +314,8 @@ if __name__ == '__main__':
     image_folder = 'data/images'
     output_txt = 'mismatch_ids.txt'
     args = get_args()
-    if args.p:
-        pre = True
+
+
 
     m = Darknet(cfgfile)
     m.load_weights(weightfile)
@@ -189,28 +323,22 @@ if __name__ == '__main__':
     if use_cuda:
         m.cuda()
 
-    if args.t:
-        ground_truths, predictions = evaluate_from_test_folder('test', m, pre)
-        create_confusion_matrix(all_ground_truths, all_predictions)
-        exit(0)
+    if args.test:
+        TP, FP, FN = evaluate_from_test_folder('test', m, args.preprocess)
     else:
-        total_images, correct_detections, under_detections, over_detections, ground_truth_list, predicted_list = evaluate_model(csv_file, image_folder, output_txt, m, pre)
+        TP, FP, FN = evaluate_model(csv_file, image_folder, output_txt, m, args.preprocess)
     
-    precision, recall, f1_score, ap = calculate_metrics(ground_truths, predictions)
+    precision, recall, f1_score = calculate_metrics(TP, FP, FN)
 
     # Create the infographic
-    create_infographic(total_images, correct_detections, under_detections, over_detections)
+    #create_infographic(total_images, correct_detections, under_detections, over_detections)
 
     # Create and display confusion matrix
-    create_confusion_matrix(ground_truth_list, predicted_list)
+    create_confusion_matrix_from_counts(TP, FP, FN)
 
-    print(f"Total Images: {total_images}")
-    print(f"Correct Detections: {correct_detections}")
-    print(f"Under Detections: {under_detections}")
-    print(f"Over Detections: {over_detections}")
     print(f"Mismatch IDs saved in: {output_txt}")
 
     print(f"Precision (%): {precision:.2f}")
     print(f"Recall (%): {recall:.2f}")
     print(f"F1-score (%): {f1_score:.2f}")
-    print(f"AP (%): {ap:.2f}")
+    #print(f"AP (%): {ap:.2f}")

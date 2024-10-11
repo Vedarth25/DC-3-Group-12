@@ -180,12 +180,12 @@ def evaluate_from_test_folder(test_folder, m, pre=False):
 
 
         # #temporal debugging
-        print(ground_truth_boxes)
-        img = cv2.imread(img_path)
-        test = boxes[0] + ground_truth_boxes
-        plot_boxes_cv2(img, test, savename='all.jpg', class_names=['fish'])
-        plot_boxes_cv2(img, ground_truth_boxes, savename='test_truth.jpg', class_names=['fish'])
-        input("Press Enter to continue...")
+        # print(ground_truth_boxes)
+        # img = cv2.imread(img_path)
+        # test = boxes[0] + ground_truth_boxes
+        # plot_boxes_cv2(img, test, savename='all.jpg', class_names=['fish'])
+        # plot_boxes_cv2(img, ground_truth_boxes, savename='test_truth.jpg', class_names=['fish'])
+        # input("Press Enter to continue...")
 
         tp, fp, fn = match_bboxes(ground_truth_boxes, boxes[0], iou_threshold=0.5)
 
@@ -272,10 +272,10 @@ def create_confusion_matrix_from_counts(TP, FP, FN):
     Function to create and display/save a confusion matrix based on counts of TP, FP, and FN.
     Excludes True Negatives (TN) since they are not tracked.
     """
-    # Define a confusion matrix with 2 rows (Actual Positive and Negative) and 2 columns (Predicted Positive and Negative)
+ 
     # We assume TN is unknown, so we only show counts for TP, FP, and FN.
-    confusion_matrix = [[TP, FP],   # Row for "Actual Positive"
-                        [FN, 0]]    # Row for "Actual Negative" (TN is unknown, set to 0)
+    confusion_matrix = [[TP, FP],   # Row for "Predicted Positive"
+                        [FN, 0]]    # Row for "Predicted Negative" (TN is unknown, set to 0)
 
     # Define labels for the axes
     labels = ['Predicted Positive', 'Predicted Negative']
@@ -285,14 +285,14 @@ def create_confusion_matrix_from_counts(TP, FP, FN):
     
     # Create a heatmap with annotations of the confusion matrix values
     sns.heatmap(confusion_matrix, annot=True, fmt="d", cmap="Blues", 
-                xticklabels=labels, yticklabels=categories)
+                xticklabels=categories, yticklabels=labels)
     
     plt.title('Confusion Matrix (Excludes TN)')
     plt.xlabel('Predicted Label')
     plt.ylabel('Actual Label')
     
     # Save and display the confusion matrix plot
-    plt.savefig('confusion_matrix_from_counts_without_TN.png')
+    plt.savefig('confusion_matrix.png')
     plt.show()
 
 

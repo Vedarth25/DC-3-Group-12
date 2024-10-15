@@ -73,9 +73,9 @@ class ImagePreprocessor:
         enhanced_img = cv2.cvtColor(enhanced_img, cv2.COLOR_BGR2RGB)
 
         # Expand dimensions to add a batch dimension (if needed)
-        enhanced_img_tensor = np.expand_dims(enhanced_img, axis=0)
+        #enhanced_img_tensor = np.expand_dims(enhanced_img, axis=0)
 
-        return enhanced_img_tensor
+        return enhanced_img
 
     def process_all_images(self, model=None):
         # Loop through all images, apply color correction, and use them in the provided model

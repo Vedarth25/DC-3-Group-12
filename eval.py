@@ -10,6 +10,7 @@ import torch
 from tqdm import tqdm  # Import tqdm for progress bar
 import argparse
 from sklearn.metrics import precision_recall_fscore_support, average_precision_score
+from Preprocessing_class import *
 
 """hyper parameters"""
 use_cuda = True
@@ -22,11 +23,13 @@ def detect_fish_in_image(imgfile, m, pre=False):
 
 
     img = cv2.imread(imgfile)
-    sized = cv2.resize(img, (m.width, m.height))
-    sized = cv2.cvtColor(sized, cv2.COLOR_BGR2RGB)
-    if pre: 
-        #TODO implement pre processing
-        print("pre processing not implemented")
+    if pre:
+        p = ImagePreprocessor('data',target_size=(m.width, m.height)) 
+        sized = p.preprocess_image(img)
+        #sized = cv2.resize(sized, (m.width, m.height))
+    else:
+        sized = cv2.resize(img, (m.width, m.height))
+        sized = cv2.cvtColor(sized, cv2.COLOR_BGR2RGB)
         
 
     boxes = do_detect(m, sized, 0.4, 0.4, use_cuda)
@@ -36,7 +39,7 @@ def detect_fish_in_image(imgfile, m, pre=False):
 
     return num_fish_detected, boxes
 
-def evaluate_model(csv_file, image_folder, output_txt, m, pre=False):
+def evaluate_model(csv_file, image_folder, output_folder, m, pre=False):
     """
     Function to evaluate the YOLO model against images from the CSV file.
     Records the mismatches and saves the result in a text file.
@@ -84,7 +87,7 @@ def evaluate_model(csv_file, image_folder, output_txt, m, pre=False):
         final_fn += len(fn)
 
     # Save mismatches to a txt file
-    with open(output_txt, 'w') as f:
+    with open(f"{output_folder}mismatch_ids.txt", 'w') as f:
         for img_id in mismatch_ids:
             f.write(f"{img_id}\n")
 
@@ -137,7 +140,7 @@ def tp_fp_fn(boxes, mask):
     
     return tp, fp, fn
 
-def evaluate_from_test_folder(test_folder, m, pre=False):
+def evaluate_from_test_folder(test_folder, m, pre=False, output_folder=''):
     """
     Evaluate the YOLO model on a test folder of images with associated text files.
     """
@@ -154,8 +157,7 @@ def evaluate_from_test_folder(test_folder, m, pre=False):
 
     for img_file in tqdm(image_files, total=total_images, desc="Evaluating images from test folder", unit="img"):
         img_id = os.path.splitext(img_file)[0]
-        if img_id != "A000049_L-avi-16367":
-            continue
+
         img_path = os.path.join(test_folder, img_file)
         txt_path = os.path.join(test_folder, img_id + '.txt')
 
@@ -200,7 +202,7 @@ def evaluate_from_test_folder(test_folder, m, pre=False):
         final_fn += fn
 
     # Save mismatches to a txt file
-    with open("missmatched_IDs_test", 'w') as f:
+    with open(f"{output_folder}mismatch_test_ids.txt", 'w') as f:
         for img_id in mismatch_ids:
             f.write(f"{img_id}\n")
 
@@ -267,7 +269,7 @@ def create_infographic(total_images, correct_detections, under_detections, over_
     plt.savefig('model_performance_infographic.png')
     plt.show()
 
-def create_confusion_matrix_from_counts(TP, FP, FN):
+def create_confusion_matrix_from_counts(TP, FP, FN, output_folder):
     """
     Function to create and display/save a confusion matrix based on counts of TP, FP, and FN.
     Excludes True Negatives (TN) since they are not tracked.
@@ -292,7 +294,7 @@ def create_confusion_matrix_from_counts(TP, FP, FN):
     plt.ylabel('Actual Label')
     
     # Save and display the confusion matrix plot
-    plt.savefig('confusion_matrix.png')
+    plt.savefig(f'{output_folder}confusion_matrix.png')
     plt.show()
 
 
@@ -334,10 +336,10 @@ if __name__ == '__main__':
     weightfile = 'merge_yolo-fish-2.weights'
     csv_file = 'data/Localization.csv'
     image_folder = 'data/images'
-    output_txt = 'mismatch_ids.txt'
-    #args = get_args()
-
-
+    output_folder = 'res_no_preproc/'
+    args = get_args()
+    if args.preprocess:
+        output_folder = "res_preproc/"
 
     m = Darknet(cfgfile)
     m.load_weights(weightfile)
@@ -345,11 +347,10 @@ if __name__ == '__main__':
     if use_cuda:
         m.cuda()
 
-    # artgs.test does not work
-    if True:
-        TP, FP, FN = evaluate_from_test_folder('data/test', m, False)
+    if args.test:
+        TP, FP, FN = evaluate_from_test_folder('data/test', m, args.preprocess, output_folder)
     else:
-        TP, FP, FN = evaluate_model(csv_file, image_folder, output_txt, m, args.preprocess)
+        TP, FP, FN = evaluate_model(csv_file, image_folder, output_folder, m, args.preprocess)
     
     precision, recall, f1_score = calculate_metrics(TP, FP, FN)
 
@@ -357,9 +358,9 @@ if __name__ == '__main__':
     #create_infographic(total_images, correct_detections, under_detections, over_detections)
 
     # Create and display confusion matrix
-    create_confusion_matrix_from_counts(TP, FP, FN)
+    create_confusion_matrix_from_counts(TP, FP, FN, output_folder)
 
-    print(f"Mismatch IDs saved in: {output_txt}")
+    print(f"Mismatch IDs saved in: {output_folder}")
 
     print(f"Precision (%): {precision:.2f}")
     print(f"Recall (%): {recall:.2f}")

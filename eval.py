@@ -11,39 +11,77 @@ from tqdm import tqdm  # Import tqdm for progress bar
 import argparse
 from sklearn.metrics import precision_recall_fscore_support, average_precision_score
 from Preprocessing_class import *
+from deep_sort_realtime.deepsort_tracker import DeepSort
 
 """hyper parameters"""
 use_cuda = True
 
-def detect_fish_in_image(imgfile, m, pre=False):
+
+def detect_fish_in_image(imgfile, m, deepsort, unique_fish_ids, pre=False):
     """
     Function to detect fish in a given image using YOLO model.
-    Returns the number of fish detected.
+    Uses Deep SORT to track and assign unique IDs to fish.
     """
-
-
     img = cv2.imread(imgfile)
     if pre:
-        p = ImagePreprocessor('data',target_size=(m.width, m.height)) 
+        p = ImagePreprocessor('data', target_size=(m.width, m.height)) 
         sized = p.preprocess_image(img)
-        #sized = cv2.resize(sized, (m.width, m.height))
     else:
         sized = cv2.resize(img, (m.width, m.height))
         sized = cv2.cvtColor(sized, cv2.COLOR_BGR2RGB)
-        
 
+    # YOLO detection
     boxes = do_detect(m, sized, 0.4, 0.4, use_cuda)
+
+    # Convert YOLO bounding boxes (x_center, y_center, width, height) into (left, top, width, height) format for Deep SORT
+    detections = []  
+
+    for box in boxes[0]:
+        x_center, y_center, width, height = box[0], box[1], box[2], box[3]
+        left = int((x_center - width / 2) * m.width)  # left = x_center - (width / 2)
+        top = int((y_center - height / 2) * m.height)  # top = y_center - (height / 2)
+        w = int(width * m.width)  # Convert width to pixel space
+        h = int(height * m.height)  # Convert height to pixel space
+        
+        # Combine the bounding box and confidence score in one tuple
+        detections.append(([left, top, w, h], box[4], 0))  # Using '0' as a placeholder class for fish
+
     
+    print(f"detections: {detections}")  # This is just for debugging: print the detections
+
+    if len(detections) > 0:
+        # Update Deep SORT tracker with detections and the image frame (passing the frame for internal embedding)
+        outputs = deepsort.update_tracks(detections, frame=img)
+
+        # Add unique track IDs to the set
+        for output in outputs:
+            track_id = output.track_id  # Each output contains a track_id attribute
+            unique_fish_ids.add(track_id)  
+
+        return len(outputs), boxes, outputs  # Return detection count, YOLO boxes, and tracking results
+    else:
+        print("Error: Detection format is incorrect or empty!") 
+        return 0, boxes, []
+
+
+
+
+
+
+
+
+
     # Assuming that each box is a fish detection
-    num_fish_detected = len(boxes[0])  # Each box is a fish detection
+    #num_fish_detected = len(boxes[0])  # Each box is a fish detection
 
-    return num_fish_detected, boxes
+    #return num_fish_detected, boxes
 
-def evaluate_model(csv_file, image_folder, output_folder, m, pre=False):
+
+
+def evaluate_model(csv_file, image_folder, output_folder, m, deepsort, unique_fish_ids, pre=False):
     """
     Function to evaluate the YOLO model against images from the CSV file.
-    Records the mismatches and saves the result in a text file.
-    Also tracks over-detection, under-detection for confusion matrix.
+    Records mismatches, tracks over/under detection for the confusion matrix.
     """
     # Read the CSV file
     data = pd.read_csv(csv_file)
@@ -67,20 +105,21 @@ def evaluate_model(csv_file, image_folder, output_folder, m, pre=False):
             print(f"Image {img_path} not found!")
             continue
 
-        # Detect fish in the image
-        detected_count, boxes = detect_fish_in_image(img_path, m, pre)
+        # Detect fish in the image and update Deep SORT
+        detected_count, boxes, tracked_objects = detect_fish_in_image(img_path, m, deepsort, unique_fish_ids, pre)
 
         # Load the mask to compare with the detected boxes
         mask_path = os.path.join('data/masks', img_id + '.png')
         mask = cv2.imread(mask_path)
         tp, fp, fn = tp_fp_fn(boxes[0], mask)
-        #check for correctness
+
+        # Check for correctness
         if tp + len(fn) != ground_truth_count or tp + len(fp) != detected_count:
             print(tp, len(fn), ground_truth_count, detected_count, tp, len(fp))
-            raise Exception(f"Ground truth count mismatch for image {img_id}. Your point matcher is shit")
+            raise Exception(f"Ground truth count mismatch for image {img_id}.")
 
         if len(fp) > 0 or len(fn) > 0:
-            mismatch_ids.append(img_id +  " FP:" + str(len(fp)) + " FN" + str(len(fn)))
+            mismatch_ids.append(img_id + " FP:" + str(len(fp)) + " FN" + str(len(fn)))
         
         final_tp += tp
         final_fp += len(fp)
@@ -92,6 +131,14 @@ def evaluate_model(csv_file, image_folder, output_folder, m, pre=False):
             f.write(f"{img_id}\n")
 
     return final_tp, final_fp, final_fn
+
+
+ 
+
+
+
+
+
 
 def tp_fp_fn(boxes, mask):
     """
@@ -140,7 +187,7 @@ def tp_fp_fn(boxes, mask):
     
     return tp, fp, fn
 
-def evaluate_from_test_folder(test_folder, m, pre=False, output_folder=''):
+def evaluate_from_test_folder(test_folder, m, deepsort, unique_fish_ids, pre=False, output_folder=''):
     """
     Evaluate the YOLO model on a test folder of images with associated text files.
     """
@@ -178,24 +225,22 @@ def evaluate_from_test_folder(test_folder, m, pre=False, output_folder=''):
             y2 = (center_y + height / 2)
             ground_truth_boxes.append([x1, y1, x2, y2])
 
-        detected_count, boxes = detect_fish_in_image(img_path, m, pre)
+        # Call detect_fish_in_image with deepsort and unique_fish_ids
+        detected_count, boxes, tracked_objects = detect_fish_in_image(img_path, m, deepsort, unique_fish_ids, pre)
 
+        # Track unique IDs
+        for obj in tracked_objects:
+            track_id = obj.track_id  # Each output contains a track_id attribute
+            unique_fish_ids.add(track_id)  
 
-        # #temporal debugging
-        # print(ground_truth_boxes)
-        # img = cv2.imread(img_path)
-        # test = boxes[0] + ground_truth_boxes
-        # plot_boxes_cv2(img, test, savename='all.jpg', class_names=['fish'])
-        # plot_boxes_cv2(img, ground_truth_boxes, savename='test_truth.jpg', class_names=['fish'])
-        # input("Press Enter to continue...")
-
+        # Match predicted boxes (from YOLO) with ground truth boxes
         tp, fp, fn = match_bboxes(ground_truth_boxes, boxes[0], iou_threshold=0.5)
 
         if tp + fn != ground_truth_count or tp + fp != detected_count:
-            raise Exception(f"Ground truth count mismatch for image {img_id}. Your box matching is shit")
-        
+            raise Exception(f"Ground truth count mismatch for image {img_id}.")
+
         if fp > 0 or fn > 0:
-            mismatch_ids.append(img_id +  " FP:" + str(fp) + " FN" + str(fn))
+            mismatch_ids.append(img_id + " FP:" + str(fp) + " FN" + str(fn))
 
         final_tp += tp
         final_fp += fp
@@ -207,6 +252,12 @@ def evaluate_from_test_folder(test_folder, m, pre=False, output_folder=''):
             f.write(f"{img_id}\n")
 
     return final_tp, final_fp, final_fn
+
+
+
+
+
+
 
 def match_bboxes(true_bboxes, pred_bboxes, iou_threshold=0.5):
     """
@@ -258,6 +309,7 @@ def create_infographic(total_images, correct_detections, under_detections, over_
     labels = 'Correct', 'Under-detections', 'Over-detections'
     sizes = [correct_detections, under_detections, over_detections]
     colors = ['green', 'orange', 'red']
+
     explode = (0.1, 0, 0)  # explode 1st slice
 
     plt.figure(figsize=(7, 7))
@@ -346,13 +398,21 @@ if __name__ == '__main__':
 
     if use_cuda:
         m.cuda()
+    
+    # Initialize Deep SORT 
+    deepsort = DeepSort(max_age=10, n_init=2, nms_max_overlap=1.0, embedder_gpu=use_cuda)
+
+    # Initialize the set to track unique fish IDs 
+    unique_fish_ids = set()
+
 
     if args.test:
-        TP, FP, FN = evaluate_from_test_folder('data/test', m, args.preprocess, output_folder)
+        TP, FP, FN = evaluate_from_test_folder('data/test', m, deepsort, unique_fish_ids, args.preprocess, output_folder)
     else:
-        TP, FP, FN = evaluate_model(csv_file, image_folder, output_folder, m, args.preprocess)
+        TP, FP, FN = evaluate_model(csv_file, image_folder, output_folder, m, deepsort, unique_fish_ids, args.preprocess)
     
     precision, recall, f1_score = calculate_metrics(TP, FP, FN)
+
 
     # Create the infographic
     #create_infographic(total_images, correct_detections, under_detections, over_detections)
@@ -360,9 +420,13 @@ if __name__ == '__main__':
     # Create and display confusion matrix
     create_confusion_matrix_from_counts(TP, FP, FN, output_folder)
 
+
+
     print(f"Mismatch IDs saved in: {output_folder}")
 
     print(f"Precision (%): {precision:.2f}")
     print(f"Recall (%): {recall:.2f}")
     print(f"F1-score (%): {f1_score:.2f}")
+
+    print(f"Total number of unique fishes: {len(unique_fish_ids)}")
     #print(f"AP (%): {ap:.2f}")

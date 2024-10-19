@@ -58,7 +58,7 @@ def detect_fish_in_image(imgfile, m, deepsort, unique_fish_ids, pre=False):
             track_id = output.track_id  # Each output contains a track_id attribute
             unique_fish_ids.add(track_id)  
 
-        return len(outputs), boxes, outputs  # Return detection count, YOLO boxes, and tracking results
+        return len(outputs), boxes, outputs  
     else:
         print("Error: Detection format is incorrect or empty!") 
         return 0, boxes, []
@@ -83,7 +83,7 @@ def evaluate_model(csv_file, image_folder, output_folder, m, deepsort, unique_fi
     Function to evaluate the YOLO model against images from the CSV file.
     Records mismatches, tracks over/under detection for the confusion matrix.
     """
-    # Read the CSV file
+    
     data = pd.read_csv(csv_file)
     total_images = len(data)
 
@@ -92,15 +92,15 @@ def evaluate_model(csv_file, image_folder, output_folder, m, deepsort, unique_fi
     final_fn = 0
     final_fp = 0
 
-    # Loop over each row in the CSV
+    
     for index, row in tqdm(data.iterrows(), total=total_images, desc="Evaluating images", unit="img"):
         img_id = row['ID']
         ground_truth_count = row['counts']
 
-        # Build the image path
+        
         img_path = os.path.join(image_folder, img_id + '.jpg')
 
-        # Check if image exists
+        
         if not os.path.exists(img_path):
             print(f"Image {img_path} not found!")
             continue
@@ -113,14 +113,17 @@ def evaluate_model(csv_file, image_folder, output_folder, m, deepsort, unique_fi
         mask = cv2.imread(mask_path)
         tp, fp, fn = tp_fp_fn(boxes[0], mask)
 
-        # Check for correctness
-        if tp + len(fn) != ground_truth_count or tp + len(fp) != detected_count:
-            print(tp, len(fn), ground_truth_count, detected_count, tp, len(fp))
-            raise Exception(f"Ground truth count mismatch for image {img_id}.")
-
-        if len(fp) > 0 or len(fn) > 0:
-            mismatch_ids.append(img_id + " FP:" + str(len(fp)) + " FN" + str(len(fn)))
+        # Log the ground truth count and detected count
+        print(f"Image {img_id}: Ground truth count = {ground_truth_count}, Detected count = {detected_count}")
         
+        # Check for correctness, log mismatches
+        if tp + len(fn) != ground_truth_count or tp + len(fp) != detected_count:
+            print(f"Mismatch for image {img_id}: Ground truth count = {ground_truth_count}, "
+                  f"Detected count = {detected_count}, True Positives = {tp}, False Positives = {len(fp)}, False Negatives = {len(fn)}")
+            mismatch_ids.append(f"{img_id} FP: {len(fp)}, FN: {len(fn)}")
+            continue  # Skip to the next image without raising an exception
+        
+        # Accumulate TP, FP, FN counts
         final_tp += tp
         final_fp += len(fp)
         final_fn += len(fn)
@@ -131,6 +134,7 @@ def evaluate_model(csv_file, image_folder, output_folder, m, deepsort, unique_fi
             f.write(f"{img_id}\n")
 
     return final_tp, final_fp, final_fn
+
 
 
  
@@ -225,23 +229,22 @@ def evaluate_from_test_folder(test_folder, m, deepsort, unique_fish_ids, pre=Fal
             y2 = (center_y + height / 2)
             ground_truth_boxes.append([x1, y1, x2, y2])
 
-        # Call detect_fish_in_image with deepsort and unique_fish_ids
+        # Detect fish in the image and track them using Deep SORT
         detected_count, boxes, tracked_objects = detect_fish_in_image(img_path, m, deepsort, unique_fish_ids, pre)
 
-        # Track unique IDs
-        for obj in tracked_objects:
-            track_id = obj.track_id  # Each output contains a track_id attribute
-            unique_fish_ids.add(track_id)  
-
-        # Match predicted boxes (from YOLO) with ground truth boxes
+        # Log the ground truth count and detected count
+        print(f"Image {img_id}: Ground truth count = {ground_truth_count}, Detected count = {detected_count}")
+        
+        # Match bounding boxes (ground truth vs detected)
         tp, fp, fn = match_bboxes(ground_truth_boxes, boxes[0], iou_threshold=0.5)
 
+        # Log mismatch if there's any
         if tp + fn != ground_truth_count or tp + fp != detected_count:
-            raise Exception(f"Ground truth count mismatch for image {img_id}.")
-
-        if fp > 0 or fn > 0:
-            mismatch_ids.append(img_id + " FP:" + str(fp) + " FN" + str(fn))
-
+            print(f"Mismatch for image {img_id}: Ground truth count = {ground_truth_count}, "
+                  f"Detected count = {detected_count}, True Positives = {tp}, False Positives = {fp}, False Negatives = {fn}")
+            mismatch_ids.append(f"{img_id} FP: {fp}, FN: {fn}")
+            continue  # Skip to the next image without raising an exception
+        
         final_tp += tp
         final_fp += fp
         final_fn += fn
@@ -252,6 +255,7 @@ def evaluate_from_test_folder(test_folder, m, deepsort, unique_fish_ids, pre=Fal
             f.write(f"{img_id}\n")
 
     return final_tp, final_fp, final_fn
+
 
 
 

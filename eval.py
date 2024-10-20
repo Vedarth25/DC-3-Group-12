@@ -14,7 +14,7 @@ from Preprocessing_class import *
 from deep_sort_realtime.deepsort_tracker import DeepSort
 
 """hyper parameters"""
-use_cuda = True
+use_cuda = False
 
 
 def detect_fish_in_image(imgfile, m, deepsort, unique_fish_ids, pre=False):
@@ -96,6 +96,7 @@ def evaluate_model(csv_file, image_folder, output_folder, m, deepsort, unique_fi
     for index, row in tqdm(data.iterrows(), total=total_images, desc="Evaluating images", unit="img"):
         img_id = row['ID']
         ground_truth_count = row['counts']
+        #TODO make a logic that extracts the habbitat and initialises a tracker for that specific habbitat
 
         
         img_path = os.path.join(image_folder, img_id + '.jpg')
@@ -405,6 +406,7 @@ if __name__ == '__main__':
         m.cuda()
     
     # Initialize Deep SORT 
+    #TODO redo tracker for each habitat instead
     deepsort = DeepSort(max_age=10, n_init=2, nms_max_overlap=1.0, embedder_gpu=use_cuda)
 
     # Initialize the set to track unique fish IDs 

@@ -193,10 +193,20 @@ def tp_fp_fn(boxes, mask):
     
     return tp, fp, fn
 
-def evaluate_from_test_folder(test_folder, m, deepsort, unique_fish_ids, pre=False, output_folder=''):
+
+
+
+import os
+
+def evaluate_from_test_folder(test_folder, m, deepsort, unique_fish_ids, pre=False, output_folder='demo_images/'):
     """
     Evaluate the YOLO model on a test folder of images with associated text files.
+    Visualize the first 25% of the dataset and save the images in the 'demo_images' folder.
     """
+    # Ensure the output folder 'demo_images/' exists or make it
+    if not os.path.exists(output_folder):
+        os.makedirs(output_folder)
+
     image_files = [f for f in os.listdir(test_folder) if f.endswith('.jpg')]
     total_images = len(image_files)
 
@@ -208,7 +218,7 @@ def evaluate_from_test_folder(test_folder, m, deepsort, unique_fish_ids, pre=Fal
     all_ground_truths = []
     all_predictions = []
 
-    for img_file in tqdm(image_files, total=total_images, desc="Evaluating images from test folder", unit="img"):
+    for img_idx, img_file in tqdm(enumerate(image_files), total=total_images, desc="Evaluating images from test folder", unit="img"):
         img_id = os.path.splitext(img_file)[0]
 
         img_path = os.path.join(test_folder, img_file)
@@ -251,12 +261,18 @@ def evaluate_from_test_folder(test_folder, m, deepsort, unique_fish_ids, pre=Fal
         final_fp += fp
         final_fn += fn
 
+        # Visualize tracks for the first 50% of the dataset
+        if img_idx < total_images * 0.5:  
+            save_path = f"{output_folder}tracked_frame_{img_id}.jpg"
+            modified_image = visualize_tracks(cv2.imread(img_path), tracked_objects, save_path)  # Visualize the results
+
     # Save mismatches to a txt file
     with open(f"{output_folder}mismatch_test_ids.txt", 'w') as f:
         for img_id in mismatch_ids:
             f.write(f"{img_id}\n")
 
     return final_tp, final_fp, final_fn
+
 
 
 
@@ -307,6 +323,36 @@ def match_bboxes(true_bboxes, pred_bboxes, iou_threshold=0.5):
     FN = matched_true_boxes.count(False)
     
     return TP, FP, FN
+
+
+
+def visualize_tracks(image, tracked_objects, save_path):
+    """
+    Visualize bounding boxes and track IDs on the image and return the modified image.
+    """
+    for track in tracked_objects:
+        # Convert track coordinates to integers
+        left, top, right, bottom = map(int, track.to_ltrb())  # Ensure coordinates are integers
+        track_id = track.track_id
+
+        # Draw bounding box and track ID on the image
+        cv2.rectangle(image, (left, top), (right, bottom), (0, 255, 0), 2)
+        cv2.putText(image, f'ID: {track_id}', (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 0, 0), 2)
+
+    # Save the modified image
+    cv2.imwrite(save_path, image)
+
+    return image
+
+
+
+
+
+
+
+
+
+
 
 def create_infographic(total_images, correct_detections, under_detections, over_detections):
     """

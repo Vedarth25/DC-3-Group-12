@@ -6,6 +6,7 @@ import seaborn as sns
 from tool.darknet2pytorch import Darknet
 from tool.utils import *
 from tool.torch_utils import *
+from tool.features import *
 import torch
 from tqdm import tqdm  # Import tqdm for progress bar
 import argparse
@@ -17,7 +18,7 @@ from deep_sort_realtime.deepsort_tracker import DeepSort
 use_cuda = False
 
 
-def detect_fish_in_image(imgfile, m, deepsort, unique_fish_ids, pre=False):
+def detect_fish_in_image(imgfile, m, deepsort, unique_fish_ids, pre=False, FE=None):
     """
     Function to detect fish in a given image using YOLO model.
     Uses Deep SORT to track and assign unique IDs to fish.
@@ -47,27 +48,43 @@ def detect_fish_in_image(imgfile, m, deepsort, unique_fish_ids, pre=False):
         detections.append(([left, top, w, h], box[4], 0))  # Using '0' as a placeholder class for fish
 
     
-    print(f"detections: {detections}")  # This is just for debugging: print the detections
+    #print(f"detections: {detections}")  # This is just for debugging: print the detections
 
     if len(detections) > 0:
+        #chips = chipper(img, detections)
+        #embedes = embedder(chips, FE)
         # Update Deep SORT tracker with detections and the image frame (passing the frame for internal embedding)
+        #Here we can define our own embedder
         outputs = deepsort.update_tracks(detections, frame=img)
+        #outputs = deepsort.update_tracks(detections, embeds=embedes)
 
         # Add unique track IDs to the set
         for output in outputs:
             track_id = output.track_id  # Each output contains a track_id attribute
             unique_fish_ids.add(track_id)  
 
-        return len(outputs), boxes, outputs  
+        return len(boxes[0]), boxes, outputs  
     else:
         print("Error: Detection format is incorrect or empty!") 
         return 0, boxes, []
 
 
+def chipper(img, bbs):
+    chips = []
+    for bb in bbs:
+        x, y, w, h = bb[0]
+        chips.append(img[y:y+h, x:x+w])
+    return chips
 
-
-
-
+def embedder(chips, FE):
+    """	
+    Function to create a feature vector
+    """
+    features = []
+    for chip in chips:
+        feature_vector = FE.extract(chip)
+        features.append(feature_vector)
+    return features
 
 
 
@@ -81,66 +98,106 @@ def detect_fish_in_image(imgfile, m, deepsort, unique_fish_ids, pre=False):
 def evaluate_model(csv_file, image_folder, output_folder, m, deepsort, unique_fish_ids, pre=False):
     """
     Function to evaluate the YOLO model against images from the CSV file.
-    Records mismatches, tracks over/under detection for the confusion matrix.
+    Processes images habitat by habitat and records the unique fish counts for each habitat.
     """
+    messed_up_counter = 0
     
     data = pd.read_csv(csv_file)
     total_images = len(data)
+    feature_extractor = FeatureExtractor()
 
     mismatch_ids = []
     final_tp = 0
     final_fn = 0
     final_fp = 0
-
     
-    for index, row in tqdm(data.iterrows(), total=total_images, desc="Evaluating images", unit="img"):
-        img_id = row['ID']
-        ground_truth_count = row['counts']
-        #TODO make a logic that extracts the habbitat and initialises a tracker for that specific habbitat
+    # Dictionary to store unique fish count for each habitat
+    habitat_fish_count = {}
 
+    # Process images grouped by habitat
+    habitats = data['habitats'].unique()  # Get all unique habitats
+
+    for habitat in habitats:
+        print(f"Processing habitat: {habitat}")
         
-        img_path = os.path.join(image_folder, img_id + '.jpg')
-
+        # Filter data by habitat
+        habitat_data = data[data['habitats'] == habitat]
         
-        if not os.path.exists(img_path):
-            print(f"Image {img_path} not found!")
-            continue
+        # Dictionary to store fish paths for each fish ID
+        fish_paths = {}  # {fish_id: [(x_center, y_center), ...]}
 
-        # Detect fish in the image and update Deep SORT
-        detected_count, boxes, tracked_objects = detect_fish_in_image(img_path, m, deepsort, unique_fish_ids, pre)
+        unique_fish_set = set()  # Set to track unique fish IDs per habitat
 
-        # Load the mask to compare with the detected boxes
-        mask_path = os.path.join('data/masks', img_id + '.png')
-        mask = cv2.imread(mask_path)
-        tp, fp, fn = tp_fp_fn(boxes[0], mask)
+        # Iterate through the images in the current habitat
+        for index, row in tqdm(habitat_data.iterrows(), total=len(habitat_data), desc=f"Evaluating images for habitat {habitat}", unit="img"):
+            img_id = row['ID']
+            ground_truth_count = row['counts']
+            
+            img_path = os.path.join(image_folder, img_id + '.jpg')
 
-        # Log the ground truth count and detected count
-        print(f"Image {img_id}: Ground truth count = {ground_truth_count}, Detected count = {detected_count}")
-        
-        # Check for correctness, log mismatches
-        if tp + len(fn) != ground_truth_count or tp + len(fp) != detected_count:
-            print(f"Mismatch for image {img_id}: Ground truth count = {ground_truth_count}, "
-                  f"Detected count = {detected_count}, True Positives = {tp}, False Positives = {len(fp)}, False Negatives = {len(fn)}")
-            mismatch_ids.append(f"{img_id} FP: {len(fp)}, FN: {len(fn)}")
-            continue  # Skip to the next image without raising an exception
-        
-        # Accumulate TP, FP, FN counts
-        final_tp += tp
-        final_fp += len(fp)
-        final_fn += len(fn)
+            if not os.path.exists(img_path):
+                print(f"Image {img_path} not found!")
+                continue
+
+            # Detect fish in the image and update Deep SORT
+            detected_count, boxes, tracked_objects = detect_fish_in_image(img_path, m, deepsort, unique_fish_ids, pre, feature_extractor)
+
+            # Add the detected fish IDs to the unique fish set
+            unique_fish_set.update(tracked_objects)
+
+            for track in tracked_objects:
+                track_id =  track.track_id
+                left, top, right, bottom = map(int, track.to_ltrb())
+                center_x = (left + right) / 2
+                y_center = (top + bottom) / 2
+
+                if track_id not in fish_paths:
+                    fish_paths[track_id] = []
+                
+                fish_paths[track_id].append((center_x, y_center))
+
+            # Load the mask to compare with the detected boxes
+            mask_path = os.path.join('data/masks', img_id + '.png')
+            mask = cv2.imread(mask_path)
+            tp, fp, fn = tp_fp_fn(boxes[0], mask)
+
+            # Log the ground truth count and detected count
+            #Note: these were incorrect because detected count was based on the tracks so far not detected cound for that specific imig
+            #print(f"Image {img_id}: Ground truth count = {ground_truth_count}, Detected count = {detected_count}")
+            
+            # Check for correctness, log mismatches
+            if tp + len(fn) != ground_truth_count or tp + len(fp) != detected_count:
+                print(f"Mismatch for image {img_id}: Ground truth count = {ground_truth_count}, "
+                      f"Detected count = {detected_count}, True Positives = {tp}, False Positives = {len(fp)}, False Negatives = {len(fn)}")
+                mismatch_ids.append(f"{img_id} FP: {len(fp)}, FN: {len(fn)}")
+                messed_up_counter += 1
+                continue  # Skip to the next image without raising an exception
+
+            # Accumulate TP, FP, FN counts
+            final_tp += tp
+            final_fp += len(fp)
+            final_fn += len(fn)
+
+
+        # Store the unique fish count for the habitat
+        habitat_fish_count[habitat] = len(unique_fish_set)
+        print(f"Unique fish count for habitat {habitat}: {len(unique_fish_set)}")
+
+        # Plot fish paths for the habitat
+        plot_fish_paths(fish_paths, img_path, output_folder, habitat, num_fish_to_plot=5)
 
     # Save mismatches to a txt file
-    with open(f"{output_folder}mismatch_ids.txt", 'w') as f:
+    with open(os.path.join(output_folder, "mismatch_ids.txt"), 'w') as f:
         for img_id in mismatch_ids:
             f.write(f"{img_id}\n")
 
+    # Save unique fish counts per habitat to a txt file
+    with open(os.path.join(output_folder, "unique_fish_per_habitat.txt"), 'w') as f:
+        for habitat, fish_count in habitat_fish_count.items():
+            f.write(f"Habitat {habitat}: {fish_count} unique fish\n")
+
+    print(f"Total mismatched images which should have raised an exception: {messed_up_counter}")
     return final_tp, final_fp, final_fn
-
-
-
-
- 
-
 
 
 
@@ -196,7 +253,6 @@ def tp_fp_fn(boxes, mask):
 
 
 
-import os
 
 def evaluate_from_test_folder(test_folder, m, deepsort, unique_fish_ids, pre=False, output_folder='demo_images/'):
     """
@@ -333,6 +389,12 @@ def visualize_tracks(image, tracked_objects, save_path):
     for track in tracked_objects:
         # Convert track coordinates to integers
         left, top, right, bottom = map(int, track.to_ltrb())  # Ensure coordinates are integers
+        # Scale the box dimensions to image dimensions
+        left = int(track.to_ltrb()[0] * image.shape[1])
+        top = int(track.to_ltrb()[1] * image.shape[0])
+        right = int(track.to_ltrb()[2] * image.shape[1])
+        bottom = int(track.to_ltrb()[3] * image.shape[0])
+        
         track_id = track.track_id
 
         # Draw bounding box and track ID on the image
@@ -343,9 +405,6 @@ def visualize_tracks(image, tracked_objects, save_path):
     cv2.imwrite(save_path, image)
 
     return image
-
-
-
 
 
 
@@ -425,10 +484,6 @@ def calculate_metrics(TP, FP, FN):
     recall = TP / (TP + FN) if (TP + FN) > 0 else 0
     # Calculate F1-score
     f1_score = (2 * precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
-    
-    # Average Precision (AP) is typically calculated over the entire precision-recall curve,
-    # but if you want a simple version, you can approximate it as:
-    #average_precision = precision  # As a simple approximation, you can use precision.
 
     # Return metrics in percentages
     return precision * 100, recall * 100, f1_score * 100, #average_precision * 100
@@ -452,7 +507,6 @@ if __name__ == '__main__':
         m.cuda()
     
     # Initialize Deep SORT 
-    #TODO redo tracker for each habitat instead
     deepsort = DeepSort(max_age=10, n_init=2, nms_max_overlap=1.0, embedder_gpu=use_cuda)
 
     # Initialize the set to track unique fish IDs 

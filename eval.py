@@ -149,6 +149,7 @@ def evaluate_model(csv_file, image_folder, output_folder, m, deepsort, unique_fi
             # Add the detected fish IDs to the unique fish set
             unique_fish_set.update(tracked_objects)
 
+
             for track in tracked_objects:
                 track_id = track.track_id
                 left, top, right, bottom = map(int, track.to_ltrb())

@@ -80,6 +80,7 @@ def plot_fish_paths(fish_paths, habitat_image_path, output_folder, habitat, num_
         # Assuming paths are already in pixel coordinates, or scale them to image dimensions
         plt.plot(path[:, 0], path[:, 1], marker='o', color=colors[idx], label=f'Fish ID: {fish_id}')
     
+
     plt.title(f'Fish Paths on Habitat {habitat}')
     plt.xlabel('X-Coordinate')
     plt.ylabel('Y-Coordinate')

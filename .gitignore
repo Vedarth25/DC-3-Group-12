@@ -14,3 +14,12 @@ predictions.jpg
 data
 
 env/
+
+res_no_preproc/tracked_frame*
+res_no_preproc/overlay*
+
+res_no_preproc/fish_paths_for_habitat_7426_20241021-013705.png
+res_no_preproc/fish_paths_for_habitat_7426_20241021-014458.png
+res_no_preproc/fish_paths_for_habitat_7426_overlay.png
+res_no_preproc/fish_paths_for_habitat_7426_overlay1.png
+res_no_preproc/fish_paths_for_habitat_7426_overlay2.png

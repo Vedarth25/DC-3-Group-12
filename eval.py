@@ -15,7 +15,7 @@ from Preprocessing_class import *
 from deep_sort_realtime.deepsort_tracker import DeepSort
 
 """hyper parameters"""
-use_cuda = False
+use_cuda = True
 
 
 def detect_fish_in_image(imgfile, m, deepsort, unique_fish_ids, pre=False, FE=None):
@@ -118,6 +118,10 @@ def evaluate_model(csv_file, image_folder, output_folder, m, deepsort, unique_fi
     habitats = data['habitats'].unique()  # Get all unique habitats
 
     for habitat in habitats:
+        # Only process habitat 7426 for testing purposes
+        if habitat != 7426:
+            continue
+
         print(f"Processing habitat: {habitat}")
         
         # Filter data by habitat
@@ -146,15 +150,15 @@ def evaluate_model(csv_file, image_folder, output_folder, m, deepsort, unique_fi
             unique_fish_set.update(tracked_objects)
 
             for track in tracked_objects:
-                track_id =  track.track_id
+                track_id = track.track_id
                 left, top, right, bottom = map(int, track.to_ltrb())
                 center_x = (left + right) / 2
-                y_center = (top + bottom) / 2
+                center_y = (top + bottom) / 2
 
                 if track_id not in fish_paths:
                     fish_paths[track_id] = []
                 
-                fish_paths[track_id].append((center_x, y_center))
+                fish_paths[track_id].append((center_x, center_y))
 
             # Load the mask to compare with the detected boxes
             mask_path = os.path.join('data/masks', img_id + '.png')
@@ -162,8 +166,7 @@ def evaluate_model(csv_file, image_folder, output_folder, m, deepsort, unique_fi
             tp, fp, fn = tp_fp_fn(boxes[0], mask)
 
             # Log the ground truth count and detected count
-            #Note: these were incorrect because detected count was based on the tracks so far not detected cound for that specific imig
-            #print(f"Image {img_id}: Ground truth count = {ground_truth_count}, Detected count = {detected_count}")
+            print(f"Image {img_id}: Ground truth count = {ground_truth_count}, Detected count = {detected_count}")
             
             # Check for correctness, log mismatches
             if tp + len(fn) != ground_truth_count or tp + len(fp) != detected_count:
@@ -178,13 +181,20 @@ def evaluate_model(csv_file, image_folder, output_folder, m, deepsort, unique_fi
             final_fp += len(fp)
             final_fn += len(fn)
 
-
         # Store the unique fish count for the habitat
         habitat_fish_count[habitat] = len(unique_fish_set)
         print(f"Unique fish count for habitat {habitat}: {len(unique_fish_set)}")
 
-        # Plot fish paths for the habitat
-        plot_fish_paths(fish_paths, img_path, output_folder, habitat, num_fish_to_plot=5)
+        #Decided to try getting the middle image from the habitat since it has the highest chance of having some fishes in it
+        # But we can easily be plotting any random picure 
+         
+        # Plot fish paths for the habitat (overlaying on the middle image)
+        middle_img_index = len(habitat_data) // 2  # Get the index of the middle image
+        middle_img_path = habitat_data.iloc[middle_img_index]['ID'] + '.jpg'
+        middle_img_path = os.path.join(image_folder, middle_img_path)
+
+        plot_fish_paths(fish_paths, middle_img_path, output_folder, habitat, num_fish_to_plot=5)
+        break  # Break after processing habitat 7426
 
     # Save mismatches to a txt file
     with open(os.path.join(output_folder, "mismatch_ids.txt"), 'w') as f:
@@ -318,7 +328,7 @@ def evaluate_from_test_folder(test_folder, m, deepsort, unique_fish_ids, pre=Fal
         final_fn += fn
 
         # Visualize tracks for the first 50% of the dataset
-        if img_idx < total_images * 0.5:  
+        if img_idx < total_images * 0.1:  
             save_path = f"{output_folder}tracked_frame_{img_id}.jpg"
             modified_image = visualize_tracks(cv2.imread(img_path), tracked_objects, save_path)  # Visualize the results
 

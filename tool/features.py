@@ -7,6 +7,8 @@ import matplotlib.pyplot as plt
 import os
 from PIL import Image
 import cv2
+import time
+
 
 # Load the pre-trained ResNet50 model
 class FeatureExtractor:
@@ -40,10 +42,10 @@ class FeatureExtractor:
         
         return features
     
+
 def plot_fish_paths(fish_paths, habitat_image_path, output_folder, habitat, num_fish_to_plot=None):
     """
     Function to plot the fish paths based on their recorded positions over a habitat image.
-
     Args:
     - fish_paths: Dictionary where key is fish_id and value is list of (x, y) coordinates for that fish.
     - habitat_image_path: Path to the image of the habitat.
@@ -52,13 +54,17 @@ def plot_fish_paths(fish_paths, habitat_image_path, output_folder, habitat, num_
     """
     # Load the habitat image
     habitat_image = cv2.imread(habitat_image_path)
+    if habitat_image is None:
+        raise FileNotFoundError(f"Image not found at {habitat_image_path}")
     
+    height, width, _ = habitat_image.shape
+
     # Prepare the figure
-    plt.figure(figsize=(10, 10))
-    
+    plt.figure(figsize=(12, 8))
+
     # Display the habitat image as the background
-    plt.imshow(habitat_image, extent=[0, habitat_image.shape[0], 0, habitat_image.shape[1]])
-    
+    plt.imshow(cv2.cvtColor(habitat_image, cv2.COLOR_BGR2RGB), extent=[0, width, height, 0])  # Set extent to image size
+
     # Limit the number of fish to plot if specified
     fish_ids = list(fish_paths.keys())
     if num_fish_to_plot is not None:
@@ -67,27 +73,83 @@ def plot_fish_paths(fish_paths, habitat_image_path, output_folder, habitat, num_
     # Generate unique colors for each fish path
     colors = plt.cm.jet(np.linspace(0, 1, len(fish_ids)))
 
-    #TODO the dimensions for image pathing need to be fixed
-    # Plot each fish path
+    # Plot each fish path, scaling them to match the image dimensions
     for idx, fish_id in enumerate(fish_ids):
         path = np.array(fish_paths[fish_id])
-        # Multiply x and y values by image width and height respectively
-        path[:, 0] *= habitat_image.shape[0]
-        path[:, 1] *= habitat_image.shape[1]
+        
+        # Assuming paths are already in pixel coordinates, or scale them to image dimensions
         plt.plot(path[:, 0], path[:, 1], marker='o', color=colors[idx], label=f'Fish ID: {fish_id}')
     
-    plt.title(f'Fish Paths on Habitat')
+    plt.title(f'Fish Paths on Habitat {habitat}')
     plt.xlabel('X-Coordinate')
     plt.ylabel('Y-Coordinate')
-    plt.legend()
+    plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))  # Position the legend outside the plot
 
-    # Invert Y-axis to match image coordinates (origin at top-left)
-    #plt.gca().invert_yaxis()
-    
     # Save the plot
     os.makedirs(output_folder, exist_ok=True)
-    plt.savefig(os.path.join(output_folder, f'fish_paths_for_{habitat}_habitat.png'))
+    output_filename = os.path.join(output_folder, f'fish_paths_for_habitat_{habitat}_overlay2.png')
+    plt.savefig(output_filename)
     plt.close()
+    
+    print(f"Fish path plot saved as {output_filename}")
+
+
+
+
+  
+
+
+
+
+
+
+
+def overlay_tracks_on_image(image_path, fish_paths, output_folder, habitat, fish_id):
+    """
+    Function to overlay fish paths on the original image.
+
+    Args:
+    - image_path: Path to the habitat image (the first image in the habitat).
+    - fish_paths: List of (x, y) coordinates representing the fish path.
+    - output_folder: Folder to save the resulting image with the overlay.
+    - habitat: The habitat identifier for saving the file.
+    - fish_id: The fish ID whose path is being overlayed.
+    """
+    # Load the original image
+    image = cv2.imread(image_path)
+
+    if image is None:
+        print(f"Error: Could not load image from path {image_path}")
+        return
+
+    # Convert image from BGR to RGB for Matplotlib
+    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+    # Plot the original image
+    plt.figure(figsize=(10, 10))
+    plt.imshow(image_rgb)
+
+    # Convert fish_paths to numpy array for easier processing
+    fish_paths = np.array(fish_paths)
+
+    # Overlay the fish path on the image
+    plt.plot(fish_paths[:, 0], fish_paths[:, 1], marker='o', label=f'Fish ID: {fish_id}', color='r')
+
+    # Title and labels
+    plt.title(f'Fish ID {fish_id} Path on Habitat {habitat}')
+    plt.xlabel('X-Coordinate')
+    plt.ylabel('Y-Coordinate')
+
+    # Save the image with the overlaid tracks
+    os.makedirs(output_folder, exist_ok=True)
+    save_path = os.path.join(output_folder, f'overlay_fish_{fish_id}_habitat_{habitat}.png')
+    plt.savefig(save_path)
+    plt.close()
+
+    print(f"Saved overlay of fish path on image: {save_path}")
+
+
+
 
 
 def create_tracking_video(frame_folder, fish_paths, output_video_path, frame_size, num_frames, fps=20):

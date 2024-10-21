@@ -36,8 +36,9 @@ def detect_fish_in_image(imgfile, m, deepsort, unique_fish_ids, pre=False, FE=No
 
     # Convert YOLO bounding boxes (x_center, y_center, width, height) into (left, top, width, height) format for Deep SORT
     detections = []  
-
+    #h, w, _ = img.shape
     for box in boxes[0]:
+        #bbox in normilised yolo format
         x_center, y_center, width, height = box[0], box[1], box[2], box[3]
         left = int((x_center - width / 2) * m.width)  # left = x_center - (width / 2)
         top = int((y_center - height / 2) * m.height)  # top = y_center - (height / 2)
@@ -119,8 +120,8 @@ def evaluate_model(csv_file, image_folder, output_folder, m, deepsort, unique_fi
 
     for habitat in habitats:
         # Only process habitat 7426 for testing purposes
-        if habitat != 7426:
-            continue
+        #if habitat != 7426:
+        #    continue
 
         print(f"Processing habitat: {habitat}")
         
@@ -194,8 +195,8 @@ def evaluate_model(csv_file, image_folder, output_folder, m, deepsort, unique_fi
         middle_img_path = habitat_data.iloc[middle_img_index]['ID'] + '.jpg'
         middle_img_path = os.path.join(image_folder, middle_img_path)
 
-        plot_fish_paths(fish_paths, middle_img_path, output_folder, habitat, num_fish_to_plot=5)
-        break  # Break after processing habitat 7426
+        plot_fish_paths(fish_paths, middle_img_path, output_folder, habitat, num_fish_to_plot=10)
+        #break  # Break after processing habitat 7426
 
     # Save mismatches to a txt file
     with open(os.path.join(output_folder, "mismatch_ids.txt"), 'w') as f:

@@ -45,13 +45,17 @@ class FeatureExtractor:
 
 def plot_fish_paths(fish_paths, habitat_image_path, output_folder, habitat, num_fish_to_plot=None):
     """
-    Function to plot the fish paths based on their recorded positions over a habitat image.
+    Function to plot the fish paths based on their recorded positions over a habitat image using OpenCV.
     Args:
     - fish_paths: Dictionary where key is fish_id and value is list of (x, y) coordinates for that fish.
     - habitat_image_path: Path to the image of the habitat.
     - output_folder: Folder to save the resulting plot.
     - num_fish_to_plot: Maximum number of fish paths to plot (None to plot all).
     """
+    import cv2
+    import os
+    import numpy as np
+
     # Load the habitat image
     habitat_image = cv2.imread(habitat_image_path)
     if habitat_image is None:
@@ -59,40 +63,51 @@ def plot_fish_paths(fish_paths, habitat_image_path, output_folder, habitat, num_
     
     height, width, _ = habitat_image.shape
 
-    # Prepare the figure
-    plt.figure(figsize=(12, 8))
-
-    # Display the habitat image as the background
-    plt.imshow(cv2.cvtColor(habitat_image, cv2.COLOR_BGR2RGB), extent=[0, width, height, 0])  # Set extent to image size
-
     # Limit the number of fish to plot if specified
     fish_ids = list(fish_paths.keys())
     if num_fish_to_plot is not None:
         fish_ids = fish_ids[:num_fish_to_plot]
 
     # Generate unique colors for each fish path
-    colors = plt.cm.jet(np.linspace(0, 1, len(fish_ids)))
+    num_colors = len(fish_ids)
+    colors = np.random.randint(0, 255, size=(num_colors, 3))  # Random RGB colors
 
-    # Plot each fish path, scaling them to match the image dimensions
+    # Draw each fish path on the habitat image
     for idx, fish_id in enumerate(fish_ids):
         path = np.array(fish_paths[fish_id])
+        path[:, 0] = path[:, 0]/608*width  # Scale X-coordinate
+        path[:, 1] = path[:, 1]/608*height   # Scale Y-coordinate
+
+        # Draw the path line
+        for j in range(1, len(path)):
+            start_point = (int(path[j-1][0]), int(path[j-1][1]))
+            end_point = (int(path[j][0]), int(path[j][1]))
+            color = tuple(int(c) for c in colors[idx])  # Convert color to tuple
+            cv2.line(habitat_image, start_point, end_point, color, thickness=2)
         
-        # Assuming paths are already in pixel coordinates, or scale them to image dimensions
-        plt.plot(path[:, 0], path[:, 1], marker='o', color=colors[idx], label=f'Fish ID: {fish_id}')
-    
+        # Draw a circle at the starting point of each fish path
+        start_point = (int(path[0][0]), int(path[0][1]))
+        cv2.circle(habitat_image, start_point, radius=5, color=color, thickness=-1)
 
-    plt.title(f'Fish Paths on Habitat {habitat}')
-    plt.xlabel('X-Coordinate')
-    plt.ylabel('Y-Coordinate')
-    plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))  # Position the legend outside the plot
+        # Add fish ID label near the starting point
+        label = f'Fish {fish_id}'
+        cv2.putText(habitat_image, label, (start_point[0], start_point[1] - 10), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2, lineType=cv2.LINE_AA)
 
-    # Save the plot
+    # Add title on the image (optional)
+    title_text = f'Fish Paths on Habitat {habitat}'
+    cv2.putText(habitat_image, title_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, lineType=cv2.LINE_AA)
+
+    # Create output folder if it doesn't exist
     os.makedirs(output_folder, exist_ok=True)
-    output_filename = os.path.join(output_folder, f'fish_paths_for_habitat_{habitat}_overlay2.png')
-    plt.savefig(output_filename)
-    plt.close()
+    
+    # Save the resulting image with fish paths
+    output_filename = os.path.join(output_folder, f'fish_paths_for_habitat_{habitat}_cv2.png')
+    cv2.imwrite(output_filename, habitat_image)
     
     print(f"Fish path plot saved as {output_filename}")
+    return habitat_image
+
 
 
 
